@@ -155,7 +155,7 @@ def valid_cell_coordinates(*, is_ld: bool) -> set[tuple[int, int]]:
 def _raw_local_center(iu: int, iv: int, side: float) -> Point:
     q = iu
     r = iv - iu
-    return Point(1.5 * side * q, sqrt(3.0) * side * (r + 0.5 * q))
+    return Point(-1.5 * side * q, sqrt(3.0) * side * (r + 0.5 * q))
 
 
 def local_cells(*, is_ld: bool) -> list[LocalSiliconCell]:
