@@ -223,12 +223,14 @@ def _reference_wafer_corners(side: float) -> list[Point]:
 
 def _transform_local_polygon(points: list[Point], wafer: Wafer) -> list[Point]:
     angle = (wafer.placement % 6) * pi / 3.0
+    do_reflect = wafer.placement > 5 or wafer.seen_from_back
     transformed: list[Point] = []
     for point in points:
-        p = point
-        if wafer.placement > 5 or wafer.seen_from_back:
-            p = Point(-p.x, p.y)
-        rotated = rotate_point(p, angle)
+        # ObjC order: rotate by placement first, then mirror if seen_from_back.
+        # M·R(φ) ≠ R(φ)·M, so the order matters for non-zero placement.
+        rotated = rotate_point(point, angle)
+        if do_reflect:
+            rotated = Point(-rotated.x, rotated.y)
         transformed.append(Point(wafer.center.x + rotated.x, wafer.center.y + rotated.y))
     return transformed
 
@@ -280,13 +282,26 @@ def partial_wafer_polygon(wafer: Wafer) -> list[Point]:
 
 
 def transform_to_wafer(cell: LocalSiliconCell, wafer: Wafer) -> SiliconCell | None:
+    # Compute the cell center: rotate by placement, then mirror if seen_from_back.
+    # This matches HXGWafer::constructWaferBezierMirrored — rotate first, mirror after.
     angle = (wafer.placement % 6) * pi / 3.0
-    local_center = cell.center
-    if wafer.placement > 5 or wafer.seen_from_back:
-        local_center = Point(-local_center.x, local_center.y)
-    rotated = rotate_point(local_center, angle)
-    center = Point(wafer.center.x + rotated.x, wafer.center.y + rotated.y)
-    full_cell = SiliconCell(
+    do_reflect = wafer.placement > 5 or wafer.seen_from_back
+    rotated_center = rotate_point(cell.center, angle)
+    if do_reflect:
+        rotated_center = Point(-rotated_center.x, rotated_center.y)
+    center = Point(wafer.center.x + rotated_center.x, wafer.center.y + rotated_center.y)
+
+    # Build the cell polygon using the same rotate-then-reflect pipeline so that
+    # the corners are consistent with partial_wafer_polygon for clipping.
+    local_corners = [Point(cell.center.x + dx, cell.center.y + dy) for dx, dy in _flat_top_hex_offsets(cell.side)]
+    cell_polygon = _transform_local_polygon(local_corners, wafer)
+
+    active_polygon = partial_wafer_polygon(wafer)
+    clipped = clip_polygon(cell_polygon, active_polygon)
+    if len(clipped) < 3 or polygon_area(clipped) <= MIN_POLYGON_AREA_MM2:
+        return None
+
+    return SiliconCell(
         layer=wafer.metadata.get("layer") if isinstance(wafer.metadata.get("layer"), int) else None,
         wafer_u=wafer.u,
         wafer_v=wafer.v,
@@ -298,25 +313,6 @@ def transform_to_wafer(cell: LocalSiliconCell, wafer: Wafer) -> SiliconCell | No
         wafer_type=wafer.partial_type,
         sensor_type=wafer.metadata.get("sensor_type") if isinstance(wafer.metadata.get("sensor_type"), str) else None,
         orientation_rad=angle,
-    )
-
-    active_polygon = partial_wafer_polygon(wafer)
-    clipped = clip_polygon(full_cell.corners(), active_polygon)
-    if len(clipped) < 3 or polygon_area(clipped) <= MIN_POLYGON_AREA_MM2:
-        return None
-
-    return SiliconCell(
-        layer=full_cell.layer,
-        wafer_u=full_cell.wafer_u,
-        wafer_v=full_cell.wafer_v,
-        iu=full_cell.iu,
-        iv=full_cell.iv,
-        center=full_cell.center,
-        side=full_cell.side,
-        is_ld=full_cell.is_ld,
-        wafer_type=full_cell.wafer_type,
-        sensor_type=full_cell.sensor_type,
-        orientation_rad=full_cell.orientation_rad,
         vertices=tuple(clipped),
     )
 

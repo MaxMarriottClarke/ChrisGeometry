@@ -150,10 +150,33 @@ def parse_chris_geometry(path: str | Path, *, layer: int | None = None, wafer_si
 
     Older Hex dumps may omit the final cassette column; this parser accepts
     both variants and stores ``cassette=None`` when the column is absent.
+
+    The file's first 47 lines are layer headers of the form::
+
+        layer tessellation_flag retraction_vectors...
+
+    tessellation_flag == 1 means the layer is viewed from the back of HGCAL
+    (i.e. mirrored), matching HXGHexView's ``seenFromBack`` logic.
     """
 
+    records = read_records(path)
+
+    # Collect per-layer tessellation flags from the header lines (first 47 file
+    # lines, identified by tokens[2] not starting with 'h' or 'l').
+    layer_types: dict[int, int] = {}
+    for record in records:
+        tokens = record.tokens
+        if len(tokens) < 3:
+            continue
+        if tokens[2][:1].lower() in {"h", "l"}:
+            continue
+        try:
+            layer_types[int(tokens[0])] = int(tokens[1])
+        except ValueError:
+            continue
+
     wafers: list[Wafer] = []
-    for record in read_records(path):
+    for record in records:
         tokens = record.tokens
         if len(tokens) < 8:
             continue
@@ -187,6 +210,7 @@ def parse_chris_geometry(path: str | Path, *, layer: int | None = None, wafer_si
                 is_partial=wafer_type != 0,
                 partial_type=wafer_type,
                 placement=placement,
+                seen_from_back=(layer_types.get(record_layer, 0) == 1),
                 cassette=cassette,
                 file_line=record.line_number,
                 metadata={
